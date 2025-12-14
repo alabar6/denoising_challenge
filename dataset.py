@@ -27,7 +27,7 @@ class DenoiseDataset(Dataset):
             self.transform = transforms.Compose(
                 [
                     transforms.ToPILImage(),
-                    transforms.Resize((512, 512)),
+                    # transforms.Resize((512, 512)),
                     transforms.ToTensor(),
                 ]
             )
@@ -63,11 +63,14 @@ class DenoiseDataset(Dataset):
         self.pairs = []
         for im_index in range(len(self.image_paths)):
             # Choosing random indexes from images
-            random_indices = np.random.choice(len(self.psf_paths), 
-                                              size=batchsize, 
-                                              replace=False)
-            
-            self.pairs.append((im_index, random_indices))
+            if psf_dir is not None:
+                random_indices = np.random.choice(len(self.psf_paths), 
+                                                size=batchsize, 
+                                                replace=False)
+                
+                self.pairs.append((im_index, random_indices))
+            else:
+                self.pairs.append((im_index, None))
 
     def __len__(self):
         return len(self.pairs)
@@ -78,12 +81,15 @@ class DenoiseDataset(Dataset):
         return fft_conv(image, psf)
 
     def add_noise_and_blur(self, image, psfs):
-        std = 1e-2
-        base_lam = 1e-2
+        std = np.random.uniform(5e-3, 15e-3)
+        base_lam = np.random.uniform(5e-3, 1e-2)
 
         result = jahne_noise(self.add_psf(image, psfs[0]), base_lam, std)
         for i in range(1, self.batchsize):
-            image_noise = jahne_noise(self.add_psf(image, psfs[i]), base_lam / (i + 1), std)
+            std = np.random.uniform(5e-3, 15e-3)
+            base_lam = np.random.uniform(5e-3, 1e-2)
+
+            image_noise = jahne_noise(self.add_psf(image, psfs[i]), base_lam, std) # / (i + 1), std)
             result = torch.concat([result, image_noise], dim=0)
 
         return result
@@ -97,15 +103,21 @@ class DenoiseDataset(Dataset):
 
         # Reading psf
         psfs = []
-        for idx in psf_idx:
-            psf = cv2.imread(self.psf_paths[idx], cv2.IMREAD_GRAYSCALE)
-            psf = expand_zeros(psf, image.shape[:2])
-            psf = psf / psf.sum() # norm by sum
-            psf = torch.from_numpy(psf).to(torch.float32)
-            psfs.append(torch.fft.fftshift(psf))
+        if psf_idx is not None:
+            for idx in psf_idx:
+                psf = cv2.imread(self.psf_paths[idx], cv2.IMREAD_GRAYSCALE)
+                psf = expand_zeros(psf, image.shape[:2])
+                psf = psf / psf.sum() # norm by sum
+                psf = torch.from_numpy(psf).to(torch.float32)
+                psfs.append(torch.fft.fftshift(psf))
+        else:
+            for idx in range(self.batchsize):
+                psfs.append(None)
 
         image = self.transform(image)
         images = self.add_noise_and_blur(image, psfs)
+
+        images = images.clip(0, 1)
 
         return images, image
 
@@ -123,7 +135,7 @@ def getDenoiseLoader(
 ):
     transform = transforms.Compose([
                                         transforms.ToPILImage(),
-                                        transforms.RandomCrop((256, 256)),
+                                        # transforms.RandomCrop((256, 256)),
                                         transforms.ToTensor()
                                    ])
 
